@@ -3,6 +3,7 @@ Default configuration utilities for MemOS.
 Provides simplified configuration generation for users.
 """
 
+import os
 from typing import Literal
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
@@ -53,16 +54,26 @@ def get_default_config(
         "api_base": openai_api_base,
     }
 
-    # Universal API embedder configuration (using OpenAI)
-    embedder_config = {
-        "backend": "universal_api",
-        "config": {
-            "provider": "openai",
-            "api_key": openai_api_key,
-            "model_name_or_path": kwargs.get("embedder_model", "text-embedding-3-large"),
-            "base_url": openai_api_base,
-        },
-    }
+    # Embedder configuration — supports ollama or universal_api backends
+    embedder_backend = kwargs.get("embedder_backend", os.getenv("MOS_EMBEDDER_BACKEND", "universal_api"))
+    if embedder_backend == "ollama":
+        embedder_config = {
+            "backend": "ollama",
+            "config": {
+                "model_name_or_path": kwargs.get("embedder_model", "bge-m3"),
+                "api_base": os.getenv("OLLAMA_API_BASE", "http://localhost:11434"),
+            },
+        }
+    else:
+        embedder_config = {
+            "backend": "universal_api",
+            "config": {
+                "provider": "openai",
+                "api_key": openai_api_key,
+                "model_name_or_path": kwargs.get("embedder_model", "text-embedding-3-large"),
+                "base_url": openai_api_base,
+            },
+        }
 
     # Base configuration
     config_dict = {
@@ -167,16 +178,26 @@ def get_default_cube_config(
         "api_base": openai_api_base,
     }
 
-    # Universal API embedder configuration (using OpenAI)
-    embedder_config = {
-        "backend": "universal_api",
-        "config": {
-            "provider": "openai",
-            "api_key": openai_api_key,
-            "model_name_or_path": kwargs.get("embedder_model", "text-embedding-3-large"),
-            "base_url": openai_api_base,
-        },
-    }
+    # Embedder configuration — supports ollama or universal_api backends
+    embedder_backend = kwargs.get("embedder_backend", os.getenv("MOS_EMBEDDER_BACKEND", "universal_api"))
+    if embedder_backend == "ollama":
+        embedder_config = {
+            "backend": "ollama",
+            "config": {
+                "model_name_or_path": kwargs.get("embedder_model", "bge-m3"),
+                "api_base": os.getenv("OLLAMA_API_BASE", "http://localhost:11434"),
+            },
+        }
+    else:
+        embedder_config = {
+            "backend": "universal_api",
+            "config": {
+                "provider": "openai",
+                "api_key": openai_api_key,
+                "model_name_or_path": kwargs.get("embedder_model", "text-embedding-3-large"),
+                "base_url": openai_api_base,
+            },
+        }
 
     # Configure text memory based on type
     if text_mem_type == "tree_text":
@@ -231,6 +252,8 @@ def get_default_cube_config(
                         "collection_name": kwargs.get("collection_name", f"{user_id}_collection"),
                         "vector_dimension": kwargs.get("vector_dimension", 3072),
                         "distance_metric": "cosine",
+                        **({"host": kwargs["qdrant_host"]} if "qdrant_host" in kwargs else {}),
+                        **({"port": kwargs["qdrant_port"]} if "qdrant_port" in kwargs else {}),
                     },
                 },
                 "embedder": embedder_config,

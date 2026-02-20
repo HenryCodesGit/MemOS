@@ -59,6 +59,9 @@ def load_default_config(user_id="default_user"):
         "SCHEDULER_TOP_K": "scheduler_top_k",
         "MOS_SCHEDULER_TOP_K": "scheduler_top_k",
         "SCHEDULER_TOP_N": "scheduler_top_n",
+        "QDRANT_HOST": "qdrant_host",
+        "QDRANT_PORT": "qdrant_port",
+        "EMBEDDING_DIMENSION": "vector_dimension",
     }
 
     # Fields that should always be kept as strings (not converted to numbers)
@@ -270,7 +273,10 @@ class MOSMCPServer:
 
         @self.mcp.tool()
         async def search_memories(
-            query: str, user_id: str | None = None, cube_ids: list[str] | None = None
+            query: str,
+            user_id: str | None = None,
+            cube_ids: list[str] | None = None,
+            threshold: float | None = None,
         ) -> dict[str, Any]:
             """
             Search for memories across user's accessible memory cubes.
@@ -282,12 +288,30 @@ class MOSMCPServer:
                 query (str): Search query to find relevant memories
                 user_id (str, optional): User ID whose cubes to search. If not provided, uses default user
                 cube_ids (list[str], optional): Specific cube IDs to search. If not provided, searches all user's cubes
+                threshold (float, optional): Minimum relativity score (0.0-1.0) to include a memory. If not provided, all results are returned.
 
             Returns:
                 dict: Search results containing text_mem, act_mem, and para_mem categories with relevant memories
             """
             try:
                 result = self.mos_core.search(query, user_id, cube_ids)
+
+                # Filter by relativity threshold if provided
+                if threshold is not None:
+                    def _get_relativity(m):
+                        if isinstance(m, dict):
+                            return float(m.get("metadata", {}).get("relativity", 0.0) or 0.0)
+                        meta = getattr(m, "metadata", None)
+                        score = getattr(meta, "relativity", None)
+                        return float(score) if score is not None else 0.0
+
+                    for mem_type in ["text_mem", "pref_mem"]:
+                        for cube_entry in result.get(mem_type, []):
+                            cube_entry["memories"] = [
+                                m for m in cube_entry.get("memories", [])
+                                if _get_relativity(m) >= threshold
+                            ]
+
                 return result
             except Exception as e:
                 import traceback
@@ -379,7 +403,7 @@ class MOSMCPServer:
                 metadata = TextualMemoryMetadata(
                     user_id=user_id or self.mos_core.user_id,
                     session_id=self.mos_core.session_id,
-                    source="mcp_update",
+                    source="conversation",
                 )
                 memory_item = TextualMemoryItem(memory=memory_content, metadata=metadata)
 

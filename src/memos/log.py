@@ -7,7 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from logging.config import dictConfig
 from pathlib import Path
-from sys import stdout
+from sys import stderr, stdout
 
 import requests
 
@@ -191,7 +191,7 @@ LOGGING_CONFIG = {
         "console": {
             "level": selected_log_level,
             "class": "logging.StreamHandler",
-            "stream": stdout,
+            "stream": stderr,
             "formatter": "no_datetime",
             "filters": ["package_tree_filter", "context_filter"],
         },

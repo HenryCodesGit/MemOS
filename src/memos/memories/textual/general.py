@@ -131,9 +131,12 @@ class GeneralTextMemory(BaseTextMemory):
         search_results = sorted(  # make higher score first
             search_results, key=lambda x: x.score, reverse=True
         )
-        result_memories = [
-            TextualMemoryItem(**search_item.payload) for search_item in search_results
-        ]
+        result_memories = []
+        for search_item in search_results:
+            payload = search_item.payload
+            if "metadata" in payload and isinstance(payload["metadata"], dict):
+                payload["metadata"]["relativity"] = search_item.score
+            result_memories.append(TextualMemoryItem(**payload))
         return result_memories
 
     def get(self, memory_id: str, user_name: str | None = None) -> TextualMemoryItem:
@@ -163,8 +166,10 @@ class GeneralTextMemory(BaseTextMemory):
         all_memories = [TextualMemoryItem(**memo.payload) for memo in all_items]
         return all_memories
 
-    def delete(self, memory_ids: list[str]) -> None:
-        """Delete a memory."""
+    def delete(self, memory_ids: list[str] | str) -> None:
+        """Delete a memory or memories."""
+        if isinstance(memory_ids, str):
+            memory_ids = [memory_ids]
         self.vector_db.delete(memory_ids)
 
     def delete_all(self) -> None:
