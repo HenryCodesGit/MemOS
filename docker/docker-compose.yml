@@ -19,6 +19,12 @@ services:
       - QDRANT_HOST=qdrant-docker
       - QDRANT_PORT=6333
       - NEO4J_URI=bolt://neo4j-docker:7687
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     volumes:
       - ../src:/app/src
       - .:/app/docker

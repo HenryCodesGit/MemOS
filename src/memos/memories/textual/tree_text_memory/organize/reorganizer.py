@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import time
 import traceback
 
@@ -67,13 +69,53 @@ class QueueMessage:
         return op_priority[self.op] < op_priority[other.op]
 
 
-def extract_first_to_last_brace(text: str):
+def extract_first_complete_json(text: str):
+    """Extract the first balanced JSON object from text using brace matching.
+
+    Unlike first-'{'-to-last-'}' which breaks when the LLM emits multiple
+    JSON blocks, this finds the first '{' and tracks nesting depth so it
+    returns only the first complete object.
+    """
     start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end < start:
+    if start == -1:
         return "", None
-    json_str = text[start : end + 1]
-    return json_str, json.loads(json_str)
+
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                json_str = text[start : i + 1]
+                return json_str, json.loads(json_str)
+
+    return "", None
+
+
+def _strip_js_comments(text: str) -> str:
+    """Remove // and /* ... */ comments that LLMs sometimes inject into JSON."""
+    # Block comments
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    # Line comments (but not inside strings — good-enough heuristic: only
+    # strip when // appears after whitespace or at line start)
+    text = re.sub(r"(?m)^\s*//.*$", "", text)
+    text = re.sub(r",\s*//[^\n]*", ",", text)
+    return text
 
 
 class GraphStructureReorganizer:
@@ -91,7 +133,7 @@ class GraphStructureReorganizer:
 
         self.is_reorganize = is_reorganize
         self._reorganize_needed = True
-        logger.warning(f"[Reorganizer] is_reorganize={is_reorganize}")
+        logger.info(f"[Reorganizer] is_reorganize={is_reorganize}")
         if self.is_reorganize:
             # ____ 1. For queue message driven thread ___________
             self.thread = ContextThread(target=self._run_message_consumer_loop)
@@ -157,13 +199,13 @@ class GraphStructureReorganizer:
         schedule.every(100).seconds.do(self.optimize_structure, scope="LongTermMemory")
         schedule.every(100).seconds.do(self.optimize_structure, scope="UserMemory")
 
-        logger.warning("Structure optimizer schedule started.")
+        logger.info("Structure optimizer schedule started.")
         while not getattr(self, "_stop_scheduler", False):
             if any(self._is_optimizing.values()):
                 time.sleep(1)
                 continue
             if self._reorganize_needed:
-                logger.warning("[Reorganizer] Triggering optimize_structure due to new nodes.")
+                logger.info("[Reorganizer] Triggering optimize_structure due to new nodes.")
                 self.optimize_structure(scope="LongTermMemory")
                 self.optimize_structure(scope="UserMemory")
                 self._reorganize_needed = False
@@ -309,7 +351,7 @@ class GraphStructureReorganizer:
         local_tree_threshold: int,
         min_cluster_size: int,
     ):
-        if len(cluster_nodes) <= min_cluster_size:
+        if len(cluster_nodes) < min_cluster_size:
             return
 
         # Large cluster ➜ local sub-clustering
@@ -386,7 +428,9 @@ class GraphStructureReorganizer:
         logger.info("[Reorganizer] Cluster relation/reasoning done.")
 
     def _local_subcluster(
-        self, cluster_nodes: list[GraphDBNode], max_length: int = 15000
+        self,
+        cluster_nodes: list[GraphDBNode],
+        max_length: int = int(os.getenv("REORGANIZER_SUBCLUSTER_MAX_LENGTH", "8000")),
     ) -> list[list[GraphDBNode]]:
         """
         Use LLM to split a large cluster into semantically coherent sub-clusters.
@@ -428,7 +472,12 @@ class GraphStructureReorganizer:
         install_command="pip install scikit-learn",
         install_link="https://scikit-learn.org/stable/install.html",
     )
-    def _partition(self, nodes, min_cluster_size: int = 10, max_cluster_size: int = 20):
+    def _partition(
+        self,
+        nodes,
+        min_cluster_size: int = int(os.getenv("REORGANIZER_MIN_CLUSTER_SIZE", "3")),
+        max_cluster_size: int = int(os.getenv("REORGANIZER_MAX_CLUSTER_SIZE", "10")),
+    ):
         """
         Partition nodes by:
         - If total nodes <= max_cluster_size -> return all nodes in one cluster.
@@ -507,14 +556,14 @@ class GraphStructureReorganizer:
                 return [nodes_list]
 
         raw_clusters = recursive_clustering(nodes)
-        filtered_clusters = [c for c in raw_clusters if len(c) > min_cluster_size]
+        filtered_clusters = [c for c in raw_clusters if len(c) >= min_cluster_size]
 
         logger.info(f"[KMeansPartition] Total clusters before filtering: {len(raw_clusters)}")
         for i, cluster in enumerate(raw_clusters):
             logger.info(f"[KMeansPartition]   Cluster-{i}: {len(cluster)} nodes")
 
         logger.info(
-            f"[KMeansPartition] Clusters after filtering (>{min_cluster_size}): {len(filtered_clusters)}"
+            f"[KMeansPartition] Clusters after filtering (>={min_cluster_size}): {len(filtered_clusters)}"
         )
 
         return filtered_clusters
@@ -536,20 +585,32 @@ class GraphStructureReorganizer:
         # Build prompt
         prompt = REORGANIZE_PROMPT.replace("{memory_items_text}", memories_items_text)
 
-        messages = [{"role": "user", "content": prompt}]
-        response_text = self.llm.generate(messages)
-        response_json = self._parse_json_result(response_text)
+        # Fallback values in case LLM fails
+        fallback_key = cluster_nodes[0].metadata.key or "Unknown cluster"
+        parent_key = fallback_key
+        parent_value = ""
+        parent_tags = []
+        parent_background = ""
 
-        # Extract fields
-        parent_key = response_json.get("key", "").strip()
-        parent_value = response_json.get("value", "").strip()
-        parent_tags = response_json.get("tags", [])
-        parent_background = response_json.get("summary", "").strip()
+        try:
+            messages = [{"role": "user", "content": prompt}]
+            response_text = self.llm.generate(messages)
+            response_json = self._parse_json_result(response_text)
 
-        embedding = self.embedder.embed([parent_value])[0]
+            parent_key = response_json.get("key", "").strip() or fallback_key
+            parent_value = response_json.get("value", "").strip()
+            parent_tags = response_json.get("tags", [])
+            parent_background = response_json.get("summary", "").strip()
+        except Exception as e:
+            logger.warning(
+                f"[Reorganizer] _summarize_cluster LLM failed, using fallback: {e}"
+            )
+            parent_value = f"Summary of: {fallback_key}"
+
+        embedding = self.embedder.embed([parent_value or parent_key])[0]
 
         parent_node = GraphDBNode(
-            memory=parent_value,
+            memory=parent_value or f"Summary of: {parent_key}",
             metadata=TreeNodeTextualMemoryMetadata(
                 user_id=None,
                 session_id=None,
@@ -570,7 +631,16 @@ class GraphStructureReorganizer:
     def _parse_json_result(self, response_text):
         try:
             response_text = response_text.replace("```", "").replace("json", "")
-            response_json = extract_first_to_last_brace(response_text)[1]
+            response_text = _strip_js_comments(response_text)
+            response_json = extract_first_complete_json(response_text)[1]
+            if response_json is None:
+                logger.warning(
+                    f"No JSON object found in LLM response.\nRaw response:\n{response_text}"
+                )
+                return {}
+            # Map common LLM mistake: "title" → "key"
+            if "title" in response_json and "key" not in response_json:
+                response_json["key"] = response_json.pop("title")
             return response_json
         except json.JSONDecodeError as e:
             logger.warning(

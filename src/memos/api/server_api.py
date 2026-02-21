@@ -39,6 +39,11 @@ app.exception_handler(HTTPException)(APIExceptionHandler.http_error_handler)
 app.exception_handler(Exception)(APIExceptionHandler.global_exception_handler)
 
 
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
+
 if __name__ == "__main__":
     import argparse
 

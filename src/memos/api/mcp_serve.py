@@ -326,23 +326,31 @@ class MOSMCPServer:
                     result = resp.json().get("data", {})
 
                 # Strip redundant/empty fields to keep MCP responses compact.
-                _drop = {
-                    "id", "memory", "ref_id",  # duplicates of top-level
-                    "embedding", "sources", "file_ids", "usage",
-                    "evolve_to", "history", "covered_history",  # always empty
-                    "vector_sync", "delete_time", "delete_record_id",
-                    "session_id", "working_binding", "is_fast",
-                    "version", "visibility", "info", "source",
-                    "background",  # near-duplicate of memory
+                _keep_metadata = {
+                    "key", "type", "memory_type",
+                    "tags", "updated_at", "relativity",
                 }
+
+                # Drop empty top-level categories.
+                result = {
+                    k: v for k, v in result.items()
+                    if isinstance(v, list) and any(
+                        isinstance(c, dict) and c.get("memories")
+                        for c in v
+                    )
+                }
+
                 for mem_type in result:
                     for cube in result.get(mem_type, []):
                         if not isinstance(cube, dict):
                             continue
+                        cube.pop("total_nodes", None)
                         for mem in cube.get("memories", []):
+                            mem.pop("ref_id", None)
                             md = mem.get("metadata", {})
-                            for f in _drop:
-                                md.pop(f, None)
+                            for f in list(md):
+                                if f not in _keep_metadata:
+                                    del md[f]
 
                 return result
             except httpx.TimeoutException:

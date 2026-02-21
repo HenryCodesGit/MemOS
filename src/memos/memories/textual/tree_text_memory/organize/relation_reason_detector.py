@@ -119,38 +119,44 @@ class RelationAndReasoningDetector:
         inferred_nodes = []
         for rel in pairwise_results["relations"]:
             if rel["relation_type"] in ("CAUSE", "CONDITION"):
-                src = self.graph_store.get_node(rel["source_id"])
-                tgt = self.graph_store.get_node(rel["target_id"])
-                if not src or not tgt:
-                    continue
+                try:
+                    src = self.graph_store.get_node(rel["source_id"])
+                    tgt = self.graph_store.get_node(rel["target_id"])
+                    if not src or not tgt:
+                        continue
 
-                prompt = INFER_FACT_PROMPT.format(
-                    source=src["memory"], target=tgt["memory"], relation_type=rel["relation_type"]
-                )
-                response_text = self._call_llm(prompt).strip()
-                if not response_text:
-                    continue
-                embedding = self.embedder.embed([response_text])[0]
-
-                inferred_nodes.append(
-                    GraphDBNode(
-                        memory=response_text,
-                        metadata=src["metadata"].__class__(
-                            user_id="",
-                            session_id="",
-                            memory_type="LongTermMemory",
-                            status="activated",
-                            key=f"InferredFact:{rel['relation_type']}",
-                            tags=["inferred"],
-                            embedding=embedding,
-                            usage=[],
-                            sources=[src["id"], tgt["id"]],
-                            background=f"Inferred from {rel['relation_type']}",
-                            confidence=0.9,
-                            type="reasoning",
-                        ),
+                    prompt = INFER_FACT_PROMPT.format(
+                        source=src["memory"], target=tgt["memory"], relation_type=rel["relation_type"]
                     )
-                )
+                    response_text = self._call_llm(prompt).strip()
+                    if not response_text:
+                        continue
+                    embedding = self.embedder.embed([response_text])[0]
+
+                    inferred_nodes.append(
+                        GraphDBNode(
+                            memory=response_text,
+                            metadata=src["metadata"].__class__(
+                                user_id="",
+                                session_id="",
+                                memory_type="LongTermMemory",
+                                status="activated",
+                                key=f"InferredFact:{rel['relation_type']}",
+                                tags=["inferred"],
+                                embedding=embedding,
+                                usage=[],
+                                sources=[src["id"], tgt["id"]],
+                                background=f"Inferred from {rel['relation_type']}",
+                                confidence=0.9,
+                                type="reasoning",
+                            ),
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[RelationDetector] Failed to infer fact node for "
+                        f"{rel['source_id']} -> {rel['target_id']}: {e}"
+                    )
         return inferred_nodes
 
     def _detect_sequence_links(self, node: GraphDBNode, nearest_nodes: list[GraphDBNode]):
