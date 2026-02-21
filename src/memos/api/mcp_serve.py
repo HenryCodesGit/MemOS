@@ -325,6 +325,25 @@ class MOSMCPServer:
                     resp.raise_for_status()
                     result = resp.json().get("data", {})
 
+                # Strip redundant/empty fields to keep MCP responses compact.
+                _drop = {
+                    "id", "memory", "ref_id",  # duplicates of top-level
+                    "embedding", "sources", "file_ids", "usage",
+                    "evolve_to", "history", "covered_history",  # always empty
+                    "vector_sync", "delete_time", "delete_record_id",
+                    "session_id", "working_binding", "is_fast",
+                    "version", "visibility", "info", "source",
+                    "background",  # near-duplicate of memory
+                }
+                for mem_type in result:
+                    for cube in result.get(mem_type, []):
+                        if not isinstance(cube, dict):
+                            continue
+                        for mem in cube.get("memories", []):
+                            md = mem.get("metadata", {})
+                            for f in _drop:
+                                md.pop(f, None)
+
                 return result
             except httpx.TimeoutException:
                 return {"error": "Search timed out after 60s", "memories": []}
@@ -359,14 +378,32 @@ class MOSMCPServer:
                 str: Success message confirming memories were added
             """
             try:
-                self.mos_core.add(
-                    messages=messages,
-                    memory_content=memory_content,
-                    doc_path=doc_path,
-                    mem_cube_id=cube_id,
-                    user_id=user_id,
-                )
+                # Proxy add through the REST API so the scheduler picks up
+                # reorganization tasks (graph relationships, memory lifecycle).
+                payload: dict[str, Any] = {
+                    "user_id": user_id or os.getenv("MOS_USER_ID", "default_user"),
+                }
+                if memory_content:
+                    payload["memory_content"] = memory_content
+                if doc_path:
+                    payload["doc_path"] = doc_path
+                if messages:
+                    payload["messages"] = messages
+                if cube_id:
+                    payload["mem_cube_id"] = cube_id
+
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        "http://localhost:8000/product/add",
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+
                 return "Memory added successfully"
+            except httpx.TimeoutException:
+                return "Error adding memory: request timed out after 60s"
+            except httpx.HTTPStatusError as e:
+                return f"Error adding memory: REST API returned {e.response.status_code}"
             except Exception as e:
                 return f"Error adding memory: {e!s}"
 
