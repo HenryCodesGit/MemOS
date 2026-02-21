@@ -567,7 +567,7 @@ class APIConfig:
             "user": os.getenv("NEO4J_USER", "neo4j"),
             "db_name": os.getenv("NEO4J_DB_NAME", "neo4j"),
             "password": os.getenv("NEO4J_PASSWORD", "12345678"),
-            "user_name": f"memos{user_id.replace('-', '')}",
+            "user_name": os.getenv("NEO4J_USER_NAME", f"memos{user_id.replace('-', '')}"),
             "auto_create": False,
             "use_multi_db": False,
             "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 1024)),

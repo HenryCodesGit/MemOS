@@ -91,6 +91,7 @@ class GraphStructureReorganizer:
 
         self.is_reorganize = is_reorganize
         self._reorganize_needed = True
+        logger.warning(f"[Reorganizer] is_reorganize={is_reorganize}")
         if self.is_reorganize:
             # ____ 1. For queue message driven thread ___________
             self.thread = ContextThread(target=self._run_message_consumer_loop)
@@ -156,13 +157,13 @@ class GraphStructureReorganizer:
         schedule.every(100).seconds.do(self.optimize_structure, scope="LongTermMemory")
         schedule.every(100).seconds.do(self.optimize_structure, scope="UserMemory")
 
-        logger.info("Structure optimizer schedule started.")
+        logger.warning("Structure optimizer schedule started.")
         while not getattr(self, "_stop_scheduler", False):
             if any(self._is_optimizing.values()):
                 time.sleep(1)
                 continue
             if self._reorganize_needed:
-                logger.info("[Reorganizer] Triggering optimize_structure due to new nodes.")
+                logger.warning("[Reorganizer] Triggering optimize_structure due to new nodes.")
                 self.optimize_structure(scope="LongTermMemory")
                 self.optimize_structure(scope="UserMemory")
                 self._reorganize_needed = False

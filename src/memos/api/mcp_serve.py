@@ -380,17 +380,22 @@ class MOSMCPServer:
             try:
                 # Proxy add through the REST API so the scheduler picks up
                 # reorganization tasks (graph relationships, memory lifecycle).
+                resolved_user = user_id or os.getenv("MOS_USER_ID", "default_user")
                 payload: dict[str, Any] = {
-                    "user_id": user_id or os.getenv("MOS_USER_ID", "default_user"),
+                    "user_id": resolved_user,
                 }
+
+                # Build messages list — always use role-based format so
+                # MemReader doesn't skip entries.
+                msgs = list(messages) if messages else []
                 if memory_content:
-                    payload["memory_content"] = memory_content
+                    msgs.append({"role": "user", "content": memory_content})
+                if msgs:
+                    payload["messages"] = msgs
                 if doc_path:
                     payload["doc_path"] = doc_path
-                if messages:
-                    payload["messages"] = messages
                 if cube_id:
-                    payload["mem_cube_id"] = cube_id
+                    payload["writable_cube_ids"] = [cube_id]
 
                 async with httpx.AsyncClient(timeout=60) as client:
                     resp = await client.post(
@@ -634,36 +639,47 @@ class MOSMCPServer:
                 return {"error": str(e)}
 
         @self.mcp.tool()
-        async def control_memory_scheduler(action: str) -> str:
+        async def control_memory_scheduler(action: str, user_id: str | None = None) -> str:
             """
-            Control the memory scheduler service.
+            Check the memory scheduler status or wait for it to finish processing.
 
-            The memory scheduler is responsible for processing and organizing memories
-            in the background. This method allows starting or stopping the scheduler service.
+            The scheduler runs inside the REST API server and auto-starts when
+            API_SCHEDULER_ON=true. It processes reorganization tasks (graph
+            relationships, memory lifecycle) submitted when memories are added.
 
             Args:
-                action (str): Action to perform - "start" to enable the scheduler, "stop" to disable it
+                action (str): Action to perform:
+                    - "status" — get scheduler status summary (task counts by state)
+                    - "wait" — block until the scheduler is idle for the given user (up to 120s)
+                user_id (str, optional): User ID for status/wait queries. Defaults to MOS_USER_ID.
 
             Returns:
-                str: Success message confirming the scheduler action or error message if failed
+                str: Scheduler status information or wait result
             """
+            uid = user_id or os.getenv("MOS_USER_ID", "default_user")
             try:
-                if action.lower() == "start":
-                    success = self.mos_core.mem_scheduler_on()
-                    return (
-                        "Memory scheduler started"
-                        if success
-                        else "Failed to start memory scheduler"
-                    )
-                elif action.lower() == "stop":
-                    success = self.mos_core.mem_scheduler_off()
-                    return (
-                        "Memory scheduler stopped" if success else "Failed to stop memory scheduler"
-                    )
-                else:
-                    return "Invalid action. Use 'start' or 'stop'"
+                async with httpx.AsyncClient(timeout=120) as client:
+                    if action.lower() == "status":
+                        resp = await client.get(
+                            "http://localhost:8000/product/scheduler/allstatus",
+                        )
+                        resp.raise_for_status()
+                        return str(resp.json())
+                    elif action.lower() == "wait":
+                        resp = await client.post(
+                            "http://localhost:8000/product/scheduler/wait",
+                            params={"user_name": uid},
+                        )
+                        resp.raise_for_status()
+                        return str(resp.json())
+                    else:
+                        return "Invalid action. Use 'status' or 'wait'"
+            except httpx.TimeoutException:
+                return f"Scheduler request timed out ({action})"
+            except httpx.HTTPStatusError as e:
+                return f"Scheduler error: REST API returned {e.response.status_code} — {e.response.text[:200]}"
             except Exception as e:
-                return f"Error controlling memory scheduler: {e!s}"
+                return f"Error querying scheduler: {e!s}"
 
 
 def _run_mcp(self, transport: str = "stdio", **kwargs):
