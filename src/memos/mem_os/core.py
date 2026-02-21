@@ -1026,7 +1026,7 @@ class MOSCore:
         else:
             self._validate_cube_access(target_user_id, mem_cube_id)
         if self.mem_cubes[mem_cube_id].config.text_mem.backend != "tree_text":
-            self.mem_cubes[mem_cube_id].text_mem.update(memory_id, memories=text_memory_item)
+            self.mem_cubes[mem_cube_id].text_mem.update(memory_id, new_memory=text_memory_item)
             logger.info(f"MemCube {mem_cube_id} updated memory {memory_id}")
         else:
             logger.warning(

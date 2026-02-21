@@ -15,7 +15,7 @@ from memos.mem_user.user_manager import UserRole
 load_dotenv()
 
 
-def load_default_config(user_id="default_user"):
+def load_default_config(user_id=os.getenv("MOS_USER_ID", "default_user")):
     """
     Load MOS configuration from environment variables.
 
@@ -62,6 +62,9 @@ def load_default_config(user_id="default_user"):
         "QDRANT_HOST": "qdrant_host",
         "QDRANT_PORT": "qdrant_port",
         "EMBEDDING_DIMENSION": "vector_dimension",
+        "MOS_LLM_BACKEND": "llm_backend",
+        "MOS_LLM_MODEL": "llm_model",
+        "MOS_CUBE_ID": "cube_id",
     }
 
     # Fields that should always be kept as strings (not converted to numbers)
@@ -75,6 +78,9 @@ def load_default_config(user_id="default_user"):
         "text_mem_type",
         "model_name",
         "embedder_model",
+        "llm_backend",
+        "llm_model",
+        "cube_id",
     }
 
     kwargs = {"user_id": user_id}
@@ -134,7 +140,8 @@ class MOSMCPServer:
             # Fall back to creating from default config
             config, cube = load_default_config()
             self.mos_core = MOS(config=config)
-            self.mos_core.register_mem_cube(cube)
+            cube_id = os.getenv("MOS_CUBE_ID")
+            self.mos_core.register_mem_cube(cube, mem_cube_id=cube_id)
         else:
             self.mos_core = mos_instance
         self._setup_tools()
@@ -433,6 +440,36 @@ class MOSMCPServer:
                 return f"Memory deleted successfully: {memory_id}"
             except Exception as e:
                 return f"Error deleting memory: {e!s}"
+
+        @self.mcp.tool()
+        async def delete_memories(
+            cube_id: str, memory_ids: list[str], user_id: str | None = None
+        ) -> str:
+            """
+            Delete multiple memories from a memory cube in one call.
+
+            Args:
+                cube_id (str): Unique identifier of the cube containing the memories
+                memory_ids (list[str]): List of memory IDs to delete
+                user_id (str, optional): User ID for access validation. If not provided, uses default user
+
+            Returns:
+                str: Summary of deletions with any errors
+            """
+            deleted = []
+            errors = []
+            for mid in memory_ids:
+                try:
+                    self.mos_core.delete(cube_id, mid, user_id)
+                    deleted.append(mid)
+                except Exception as e:
+                    errors.append(f"{mid}: {e!s}")
+            parts = []
+            if deleted:
+                parts.append(f"Deleted {len(deleted)} memories")
+            if errors:
+                parts.append(f"{len(errors)} errors: {'; '.join(errors)}")
+            return ". ".join(parts) or "No memory IDs provided"
 
         @self.mcp.tool()
         async def delete_all_memories(cube_id: str, user_id: str | None = None) -> str:

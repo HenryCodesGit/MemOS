@@ -362,7 +362,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             chat_read_nodes = []
             for w in windows:
                 resp = self._get_llm_response(w["text"], custom_tags)
-                for m in resp.get("memory list", []):
+                for m in resp.get("memory list", resp.get("memory_list", [])):
                     try:
                         memory_type = (
                             m.get("memory_type", "LongTermMemory")
@@ -390,7 +390,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         response_json = self._get_llm_response(raw_memory, custom_tags)
 
         chat_read_nodes = []
-        for memory_i_raw in response_json.get("memory list", []):
+        for memory_i_raw in response_json.get("memory list", response_json.get("memory_list", [])):
             try:
                 memory_type = (
                     memory_i_raw.get("memory_type", "LongTermMemory")

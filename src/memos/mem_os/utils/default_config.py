@@ -199,6 +199,24 @@ def get_default_cube_config(
             },
         }
 
+    # Build LLM config for tree_text (supports ollama or openai backends)
+    llm_backend = kwargs.get("llm_backend", os.getenv("MOS_LLM_BACKEND", "openai"))
+    if llm_backend == "ollama":
+        llm_model = kwargs.get("llm_model", os.getenv("MOS_LLM_MODEL", "qwen3:0.6b"))
+        llm_api_base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
+        tree_llm_config = {
+            "backend": "ollama",
+            "config": {
+                "model_name_or_path": llm_model,
+                "api_base": llm_api_base,
+                "temperature": kwargs.get("llm_temperature", 0.1),
+                "max_tokens": kwargs.get("llm_max_tokens", 256),
+                "remove_think_prefix": True,
+            },
+        }
+    else:
+        tree_llm_config = {"backend": "openai", "config": openai_config}
+
     # Configure text memory based on type
     if text_mem_type == "tree_text":
         # Tree text memory requires Neo4j configuration
@@ -219,22 +237,40 @@ def get_default_cube_config(
             "password": kwargs.get("neo4j_password", "12345678"),
             "auto_create": kwargs.get("neo4j_auto_create", True),
             "use_multi_db": kwargs.get("use_multi_db", False),
-            "embedding_dimension": kwargs.get("embedding_dimension", 3072),
+            "embedding_dimension": kwargs.get("embedding_dimension", kwargs.get("vector_dimension", 3072)),
         }
         if not kwargs.get("use_multi_db", False):
             neo4j_config["user_name"] = f"memos{user_id.replace('-', '').replace('_', '')}"
 
+        # Search strategy: "fast" = vector-only (1 LLM call via reasoner)
+        search_strategy = kwargs.get("search_strategy", {
+            "fast_graph": True,
+            "bm25": False,
+            "cot": False,
+            "fulltext": False,
+        })
+
+        # Memory size limits
+        memory_size = kwargs.get("memory_size", {
+            "WorkingMemory": 20,
+            "LongTermMemory": 1500,
+            "UserMemory": 10000,
+        })
+
         text_mem_config = {
             "backend": "tree_text",
             "config": {
-                "extractor_llm": {"backend": "openai", "config": openai_config},
-                "dispatcher_llm": {"backend": "openai", "config": openai_config},
+                "extractor_llm": tree_llm_config,
+                "dispatcher_llm": tree_llm_config,
                 "graph_db": {
                     "backend": "neo4j",
                     "config": neo4j_config,
                 },
                 "embedder": embedder_config,
                 "reorganize": kwargs.get("enable_reorganize", False),
+                "search_strategy": search_strategy,
+                "memory_size": memory_size,
+                "mode": kwargs.get("tree_mode", "sync"),
             },
         }
 
