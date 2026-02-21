@@ -3,6 +3,8 @@ import os
 
 from typing import Any
 
+import httpx
+
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 
@@ -65,6 +67,7 @@ def load_default_config(user_id=os.getenv("MOS_USER_ID", "default_user")):
         "MOS_LLM_BACKEND": "llm_backend",
         "MOS_LLM_MODEL": "llm_model",
         "MOS_CUBE_ID": "cube_id",
+        "NEO4J_BACKEND": "graph_db_backend",
     }
 
     # Fields that should always be kept as strings (not converted to numbers)
@@ -81,6 +84,8 @@ def load_default_config(user_id=os.getenv("MOS_USER_ID", "default_user")):
         "llm_backend",
         "llm_model",
         "cube_id",
+        "qdrant_host",
+        "graph_db_backend",
     }
 
     kwargs = {"user_id": user_id}
@@ -301,25 +306,28 @@ class MOSMCPServer:
                 dict: Search results containing text_mem, act_mem, and para_mem categories with relevant memories
             """
             try:
-                result = self.mos_core.search(query, user_id, cube_ids)
-
-                # Filter by relativity threshold if provided
+                # Proxy search through the REST API (uvicorn) to avoid
+                # ContextThreadPoolExecutor deadlocks in tree_text pipeline.
+                payload = {
+                    "query": query,
+                    "user_id": user_id or os.getenv("MOS_USER_ID", "default_user"),
+                    "readable_cube_ids": cube_ids,
+                    "top_k": int(os.getenv("MOS_TOP_K", "50")),
+                }
                 if threshold is not None:
-                    def _get_relativity(m):
-                        if isinstance(m, dict):
-                            return float(m.get("metadata", {}).get("relativity", 0.0) or 0.0)
-                        meta = getattr(m, "metadata", None)
-                        score = getattr(meta, "relativity", None)
-                        return float(score) if score is not None else 0.0
+                    payload["relativity"] = threshold
 
-                    for mem_type in ["text_mem", "pref_mem"]:
-                        for cube_entry in result.get(mem_type, []):
-                            cube_entry["memories"] = [
-                                m for m in cube_entry.get("memories", [])
-                                if _get_relativity(m) >= threshold
-                            ]
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        "http://localhost:8000/product/search",
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+                    result = resp.json().get("data", {})
 
                 return result
+            except httpx.TimeoutException:
+                return {"error": "Search timed out after 60s", "memories": []}
             except Exception as e:
                 import traceback
 

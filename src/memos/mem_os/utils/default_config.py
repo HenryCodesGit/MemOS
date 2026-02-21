@@ -231,16 +231,34 @@ def get_default_cube_config(
             db_name = kwargs.get("neo4j_db_name", "neo4j")
 
         neo4j_config = {
-            "uri": kwargs.get("neo4j_uri", "bolt://localhost:7687"),
-            "user": kwargs.get("neo4j_user", "neo4j"),
+            "uri": kwargs.get("neo4j_uri", os.getenv("NEO4J_URI", "bolt://localhost:7687")),
+            "user": kwargs.get("neo4j_user", os.getenv("NEO4J_USER", "neo4j")),
             "db_name": db_name,
-            "password": kwargs.get("neo4j_password", "12345678"),
-            "auto_create": kwargs.get("neo4j_auto_create", True),
+            "password": kwargs.get("neo4j_password", os.getenv("NEO4J_PASSWORD", "12345678")),
+            "auto_create": kwargs.get("neo4j_auto_create", False),
             "use_multi_db": kwargs.get("use_multi_db", False),
-            "embedding_dimension": kwargs.get("embedding_dimension", kwargs.get("vector_dimension", 3072)),
+            "embedding_dimension": kwargs.get("vector_dimension", int(os.getenv("EMBEDDING_DIMENSION", "1024"))),
         }
         if not kwargs.get("use_multi_db", False):
             neo4j_config["user_name"] = f"memos{user_id.replace('-', '').replace('_', '')}"
+
+        # Vec config for Qdrant — required by neo4j-community backend for vector storage
+        qdrant_host = kwargs.get("qdrant_host", os.getenv("QDRANT_HOST"))
+        qdrant_port = kwargs.get("qdrant_port", os.getenv("QDRANT_PORT"))
+        if qdrant_host or qdrant_port:
+            neo4j_config["vec_config"] = {
+                "backend": "qdrant",
+                "config": {
+                    "collection_name": kwargs.get("qdrant_collection", "neo4j_vec_db"),
+                    "vector_dimension": kwargs.get("vector_dimension", int(os.getenv("EMBEDDING_DIMENSION", "1024"))),
+                    "distance_metric": "cosine",
+                    "host": qdrant_host or "localhost",
+                    "port": int(qdrant_port) if qdrant_port else 6333,
+                    "path": os.getenv("QDRANT_PATH"),
+                    "url": os.getenv("QDRANT_URL"),
+                    "api_key": os.getenv("QDRANT_API_KEY"),
+                },
+            }
 
         # Search strategy: "fast" = vector-only (1 LLM call via reasoner)
         search_strategy = kwargs.get("search_strategy", {
@@ -263,7 +281,7 @@ def get_default_cube_config(
                 "extractor_llm": tree_llm_config,
                 "dispatcher_llm": tree_llm_config,
                 "graph_db": {
-                    "backend": "neo4j",
+                    "backend": kwargs.get("graph_db_backend", os.getenv("NEO4J_BACKEND", "neo4j-community")),
                     "config": neo4j_config,
                 },
                 "embedder": embedder_config,
