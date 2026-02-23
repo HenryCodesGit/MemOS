@@ -28,6 +28,7 @@ services:
     volumes:
       - ../src:/app/src
       - .:/app/docker
+      - ../../backups:/app/backups
     networks:
       - memos_network
 

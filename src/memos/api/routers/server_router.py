@@ -44,6 +44,8 @@ from memos.api.product_models import (
     GetMemoryResponse,
     GetUserNamesByMemoryIdsRequest,
     GetUserNamesByMemoryIdsResponse,
+    GraphChildrenRequest,
+    GraphTopicsRequest,
     MemoryResponse,
     RecoverMemoryByRecordIdRequest,
     RecoverMemoryByRecordIdResponse,
@@ -95,6 +97,161 @@ redis_client = components["redis_client"]
 status_tracker = TaskStatusTracker(redis_client=redis_client)
 graph_db = components["graph_db"]
 vector_db = components["vector_db"]
+
+
+# =============================================================================
+# Graph Browsing API Endpoints
+# =============================================================================
+
+
+@router.post("/graph/topics", summary="Browse memory topic nodes")
+def graph_topics(req: GraphTopicsRequest):
+    """Return all topic nodes with child counts, unlinked count, and total leaf count."""
+    try:
+        driver = graph_db.driver
+
+        with driver.session() as session:
+            # Topic nodes with child counts
+            topics_result = session.run(
+                """
+                MATCH (n:Memory)
+                WHERE n.type = 'topic'
+                  AND n.user_name = $user_name
+                  AND n.status = 'activated'
+                OPTIONAL MATCH (n)-[:PARENT]->(c:Memory)
+                WHERE c.user_name = $user_name
+                RETURN n.id AS id, n.key AS key, n.memory AS memory,
+                       n.tags AS tags, count(c) AS child_count
+                ORDER BY count(c) DESC
+                """,
+                user_name=req.user_name,
+            )
+            topics = [
+                {
+                    "id": r["id"],
+                    "key": r["key"],
+                    "memory": r["memory"],
+                    "tags": r["tags"],
+                    "child_count": r["child_count"],
+                }
+                for r in topics_result
+            ]
+
+            # Unlinked nodes (non-topic, no incoming PARENT edge)
+            unlinked_result = session.run(
+                """
+                MATCH (n:Memory)
+                WHERE n.user_name = $user_name
+                  AND n.status = 'activated'
+                  AND (n.type IS NULL OR n.type <> 'topic')
+                  AND NOT (()-[:PARENT]->(n))
+                RETURN count(n) AS cnt
+                """,
+                user_name=req.user_name,
+            )
+            unlinked_count = unlinked_result.single()["cnt"]
+
+            # Total leaf memories (non-topic)
+            total_result = session.run(
+                """
+                MATCH (n:Memory)
+                WHERE n.user_name = $user_name
+                  AND n.status = 'activated'
+                  AND (n.type IS NULL OR n.type <> 'topic')
+                RETURN count(n) AS cnt
+                """,
+                user_name=req.user_name,
+            )
+            total_memories = total_result.single()["cnt"]
+
+        return {
+            "topics": topics,
+            "unlinked_count": unlinked_count,
+            "total_memories": total_memories,
+        }
+    except Exception as e:
+        logger.error(f"graph/topics error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/graph/children", summary="Browse children of a topic node")
+def graph_children(req: GraphChildrenRequest):
+    """Return children of a topic node, or unlinked nodes if parent_id is null."""
+    try:
+        driver = graph_db.driver
+
+        with driver.session() as session:
+            if req.parent_id is not None:
+                # Get parent info
+                parent_result = session.run(
+                    """
+                    MATCH (n:Memory)
+                    WHERE n.id = $parent_id
+                      AND n.user_name = $user_name
+                    RETURN n.id AS id, n.key AS key, n.memory AS memory
+                    """,
+                    parent_id=req.parent_id,
+                    user_name=req.user_name,
+                )
+                parent_record = parent_result.single()
+                parent = (
+                    {
+                        "id": parent_record["id"],
+                        "key": parent_record["key"],
+                        "memory": parent_record["memory"],
+                    }
+                    if parent_record
+                    else None
+                )
+
+                # Get children
+                children_result = session.run(
+                    """
+                    MATCH (p:Memory)-[:PARENT]->(c:Memory)
+                    WHERE p.id = $parent_id
+                      AND c.user_name = $user_name
+                      AND c.status = 'activated'
+                    RETURN c.id AS id, c.memory AS memory, c.key AS key,
+                           c.tags AS tags, c.updated_at AS updated_at, c.status AS status
+                    """,
+                    parent_id=req.parent_id,
+                    user_name=req.user_name,
+                )
+            else:
+                parent = None
+                # Unlinked nodes
+                children_result = session.run(
+                    """
+                    MATCH (n:Memory)
+                    WHERE n.user_name = $user_name
+                      AND n.status = 'activated'
+                      AND (n.type IS NULL OR n.type <> 'topic')
+                      AND NOT (()-[:PARENT]->(n))
+                    RETURN n.id AS id, n.memory AS memory, n.key AS key,
+                           n.tags AS tags, n.updated_at AS updated_at, n.status AS status
+                    """,
+                    user_name=req.user_name,
+                )
+
+            children = [
+                {
+                    "id": r["id"],
+                    "memory": r["memory"],
+                    "key": r["key"],
+                    "tags": r["tags"],
+                    "updated_at": r["updated_at"],
+                    "status": r["status"],
+                }
+                for r in children_result
+            ]
+
+        return {
+            "parent": parent,
+            "children": children,
+        }
+    except Exception as e:
+        logger.error(f"graph/children error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =============================================================================

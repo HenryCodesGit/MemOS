@@ -1295,3 +1295,22 @@ class RecoverMemoryByRecordIdRequest(BaseRequest):
 
 class RecoverMemoryByRecordIdResponse(BaseResponse[dict]):
     """Response model for recovering memory by record id."""
+
+
+# ─── Graph Browsing Models ──────────────────────────────────────────────────
+
+
+class GraphTopicsRequest(BaseRequest):
+    """Request model for browsing memory topic nodes."""
+
+    user_name: str = Field(..., description="Cube ID (user_name in Neo4j)")
+
+
+class GraphChildrenRequest(BaseRequest):
+    """Request model for browsing children of a topic node."""
+
+    user_name: str = Field(..., description="Cube ID (user_name in Neo4j)")
+    parent_id: str | None = Field(
+        None,
+        description="Topic node ID to get children for. If null, returns unlinked nodes.",
+    )

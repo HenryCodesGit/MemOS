@@ -690,6 +690,72 @@ class MOSMCPServer:
                 return f"Error querying scheduler: {e!s}"
 
 
+        @self.mcp.tool()
+        async def browse_memory_topics(user_id: str) -> dict[str, Any]:
+            """
+            Browse the memory topic tree. Returns all topic nodes with child counts,
+            plus the number of unlinked (uncategorized) memories and total leaf count.
+
+            Use this to get a high-level overview of the memory graph structure before
+            drilling into a specific topic with browse_topic_children.
+
+            Args:
+                user_id (str): The cube ID / user_name to browse (e.g. "henry-kb").
+
+            Returns:
+                dict: Contains "topics" (list of {id, key, memory, tags, child_count}),
+                      "unlinked_count", and "total_memories".
+            """
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.post(
+                        "http://localhost:8000/product/graph/topics",
+                        json={"user_name": user_id},
+                    )
+                    resp.raise_for_status()
+                    return resp.json()
+            except httpx.TimeoutException:
+                return {"error": "Request timed out after 30s"}
+            except httpx.HTTPStatusError as e:
+                return {"error": f"REST API returned {e.response.status_code}"}
+            except Exception as e:
+                return {"error": str(e)}
+
+        @self.mcp.tool()
+        async def browse_topic_children(
+            user_id: str, parent_id: str | None = None
+        ) -> dict[str, Any]:
+            """
+            Browse children of a topic node, or unlinked memories if parent_id is omitted.
+
+            Args:
+                user_id (str): The cube ID / user_name to browse (e.g. "henry-kb").
+                parent_id (str, optional): Topic node ID returned by browse_memory_topics.
+                    If None/omitted, returns all unlinked (uncategorized) memories.
+
+            Returns:
+                dict: Contains "parent" (topic info or null) and "children" (list of
+                      {id, memory, key, tags, updated_at, status}).
+            """
+            try:
+                payload: dict[str, Any] = {"user_name": user_id}
+                if parent_id is not None:
+                    payload["parent_id"] = parent_id
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.post(
+                        "http://localhost:8000/product/graph/children",
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+                    return resp.json()
+            except httpx.TimeoutException:
+                return {"error": "Request timed out after 30s"}
+            except httpx.HTTPStatusError as e:
+                return {"error": f"REST API returned {e.response.status_code}"}
+            except Exception as e:
+                return {"error": str(e)}
+
+
 def _run_mcp(self, transport: str = "stdio", **kwargs):
     if transport == "stdio":
         self.mcp.run(transport="stdio")
